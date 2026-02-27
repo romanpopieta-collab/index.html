@@ -13,20 +13,32 @@
         import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 
-        // Безпечне отримання конфігурації
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        // Ваші налаштування Firebase
+        const firebaseConfig = {
+            apiKey: "AIzaSyBI72wYVkWPnU6IShQA0GzNv2qxkSwPjxc",
+            authDomain: "raf-serials.firebaseapp.com",
+            projectId: "raf-serials",
+            storageBucket: "raf-serials.firebasestorage.app",
+            messagingSenderId: "908671765741",
+            appId: "1:908671765741:web:bc0573e464c69ec90d90e4",
+            measurementId: "G-4RX35LRNFF"
+        };
+
+        // Логіка ініціалізації
+        const envConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        const config = envConfig || firebaseConfig;
         
         try {
-            if (firebaseConfig.apiKey) {
-                const app = initializeApp(firebaseConfig);
-                const db = getFirestore(app);
-                const auth = getAuth(app);
-                const appId = typeof __app_id !== 'undefined' ? __app_id : 'raf-serials-default';
+            const app = initializeApp(config);
+            const db = getFirestore(app);
+            const auth = getAuth(app);
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'raf-serials-default';
 
-                window.fb = { db, auth, appId, doc, setDoc, onSnapshot, signInWithCustomToken, signInAnonymously };
-            }
+            // Експортуємо у вікно для доступу з інших скриптів
+            window.fb = { db, auth, appId, doc, setDoc, onSnapshot, signInWithCustomToken, signInAnonymously };
+            console.log("Firebase Connected");
         } catch (e) {
-            console.warn("Firebase config issues. Running in local mode.");
+            console.error("Firebase Init Error:", e);
         }
     </script>
 
@@ -95,7 +107,7 @@
         </div>
     </div>
 
-    <!-- Деталі (Модалка) -->
+    <!-- Модалка деталей -->
     <div id="modal" class="fixed inset-0 bg-black/90 z-[200] hidden items-center justify-center p-4 backdrop-blur-xl transition-all duration-300">
         <div class="glass w-full max-w-2xl max-h-[85vh] rounded-[2rem] overflow-hidden flex flex-col shadow-2xl border border-white/10">
             <div id="modalContent" class="p-8 overflow-y-auto no-scrollbar flex-1"></div>
@@ -121,202 +133,8 @@
                 main.classList.remove('hidden');
                 setTimeout(() => main.classList.add('opacity-100'), 50);
                 
-                if (window.fb) initApp();
-                else console.log("LocalStorage mode active");
-            } else {
-                const err = document.getElementById('loginError');
-                err.classList.remove('hidden');
-                setTimeout(() => err.classList.add('hidden'), 2000);
-            }
-        };
-
-        async function initApp() {
-            const { auth, db, appId, doc, onSnapshot, signInWithCustomToken, signInAnonymously } = window.fb;
-
-            try {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
-                }
-            } catch (e) { console.error("Auth Fail:", e); }
-
-            auth.onAuthStateChanged((user) => {
-                if (!user) return;
-                currentUser = user;
-                
-                const dot = document.getElementById('syncDot');
-                const text = document.getElementById('syncText');
-                dot.classList.replace('bg-gray-600', 'bg-green-500');
-                dot.classList.add('animate-pulse');
-                text.innerText = "Синхронізовано";
-                text.classList.replace('text-gray-500', 'text-green-500');
-
-                const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'serials', 'main');
-                onSnapshot(docRef, (docSnap) => {
-                    if (docSnap.exists()) {
-                        myShows = docSnap.data().list || [];
-                        renderGallery();
-                    }
-                }, (err) => console.error("Cloud Error:", err));
-            });
-        }
-
-        window.saveToCloud = async () => {
-            if (!currentUser || !window.fb) return;
-            const { db, appId, doc, setDoc } = window.fb;
-            const docRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'serials', 'main');
-            await setDoc(docRef, { list: myShows });
-        };
-
-        window.addShow = async (id) => {
-            if (myShows.find(s => s.id === id)) return;
-            const res = await fetch(`https://api.tvmaze.com/shows/${id}?embed=episodes`);
-            const show = await res.json();
-            const newShow = {
-                id: show.id,
-                name: show.name,
-                image: show.image?.medium || '',
-                userStatus: '⏳ У планах',
-                currentEpisodeCount: 0,
-                totalEpisodes: show._embedded?.episodes?.length || 0,
-                episodes: (show._embedded?.episodes || []).map(e => ({ 
-                    id: e.id, watched: false, name: e.name, season: e.season, number: e.number 
-                }))
-            };
-            myShows.unshift(newShow);
-            await saveToCloud();
-            document.getElementById('searchResults').classList.add('hidden');
-            document.getElementById('searchInput').value = '';
-            renderGallery();
-        };
-
-        window.renderGallery = () => {
-            const gallery = document.getElementById('gallery');
-            let filtered = [...myShows];
-            
-            if (currentTab === 'watching') filtered = myShows.filter(s => s.userStatus === '👀 Дивлюсь');
-            else if (currentTab === 'planning') filtered = myShows.filter(s => s.userStatus === '⏳ У планах');
-            else if (currentTab === 'watched') filtered = myShows.filter(s => s.userStatus === '✅ Переглянуто');
-
-            if (filtered.length === 0) {
-                gallery.innerHTML = `<div class="col-span-full text-center py-20 text-gray-700 text-[10px] uppercase font-black tracking-[0.3em]">Пуста полиця</div>`;
-                return;
-            }
-
-            gallery.innerHTML = filtered.map(s => `
-                <div class="card-row glass p-4 rounded-2xl flex items-center gap-5 cursor-pointer group" onclick="openModal(${s.id})">
-                    <img src="${s.image}" class="w-12 h-16 object-cover rounded-lg bg-zinc-900 shadow-xl transition-transform group-hover:scale-105">
-                    <div class="flex-1">
-                        <div class="font-black text-sm text-white leading-tight mb-1">${s.name}</div>
-                        <div class="flex items-center gap-2">
-                             <div class="h-1 flex-1 bg-white/5 rounded-full overflow-hidden">
-                                <div class="h-full bg-blue-500" style="width: ${(s.currentEpisodeCount/s.totalEpisodes)*100}%"></div>
-                             </div>
-                             <span class="text-[9px] font-black text-blue-400 uppercase">${s.currentEpisodeCount}/${s.totalEpisodes}</span>
-                        </div>
-                    </div>
-                </div>
-            `).join('');
-        };
-
-        window.setTab = (tab) => {
-            currentTab = tab;
-            document.querySelectorAll('button[id^="tab-"]').forEach(b => {
-                b.classList.replace('border-blue-500', 'border-transparent');
-                b.classList.replace('text-blue-500', 'text-gray-500');
-            });
-            document.getElementById(`tab-${tab}`).classList.replace('border-transparent', 'border-blue-500');
-            document.getElementById(`tab-${tab}`).classList.replace('text-gray-500', 'text-blue-500');
-            renderGallery();
-        };
-
-        const searchInput = document.getElementById('searchInput');
-        searchInput.addEventListener('input', async (e) => {
-            const q = e.target.value;
-            if (q.length < 3) {
-                document.getElementById('searchResults').classList.add('hidden');
-                return;
-            }
-            const res = await fetch(`https://api.tvmaze.com/search/shows?q=${q}`);
-            const data = await res.json();
-            const results = document.getElementById('searchResults');
-            results.innerHTML = data.slice(0, 5).map(i => `
-                <div onclick="addShow(${i.show.id})" class="p-4 hover:bg-white/10 cursor-pointer flex items-center gap-4 transition-colors">
-                    <img src="${i.show.image?.medium || ''}" class="w-10 h-12 object-cover rounded bg-zinc-800">
-                    <div>
-                        <div class="text-sm font-black text-white">${i.show.name}</div>
-                        <div class="text-[9px] text-gray-500 uppercase font-bold">${i.show.premiered?.split('-')[0] || 'N/A'} • ${i.show.network?.name || i.show.webChannel?.name || 'TV'}</div>
-                    </div>
-                </div>
-            `).join('');
-            results.classList.remove('hidden');
-        });
-
-        window.openModal = (id) => {
-            currentEditingId = id;
-            const show = myShows.find(s => s.id === id);
-            if (!show) return;
-            const content = document.getElementById('modalContent');
-            content.innerHTML = `
-                <div class="mb-10 text-center">
-                    <img src="${show.image}" class="w-32 h-44 object-cover rounded-2xl mx-auto mb-6 shadow-2xl border border-white/10">
-                    <h2 class="text-3xl font-black text-white mb-4 uppercase tracking-tighter">${show.name}</h2>
-                    <div class="inline-flex bg-white/5 p-1 rounded-xl border border-white/5">
-                        <button onclick="updateStatus(${show.id}, '👀 Дивлюсь')" class="px-4 py-2 rounded-lg text-[9px] font-black uppercase transition-all ${show.userStatus === '👀 Дивлюсь' ? 'bg-blue-600 text-white shadow-lg' : 'text-gray-500'}">Дивлюсь</button>
-                        <button onclick="updateStatus(${show.id}, '⏳ У планах')" class="px-4 py-2 rounded-lg text-[9px] font-black uppercase transition-all ${show.userStatus === '⏳ У планах' ? 'bg-white/10 text-white' : 'text-gray-500'}">Плани</button>
-                        <button onclick="updateStatus(${show.id}, '✅ Переглянуто')" class="px-4 py-2 rounded-lg text-[9px] font-black uppercase transition-all ${show.userStatus === '✅ Переглянуто' ? 'bg-green-600 text-white' : 'text-gray-500'}">Архів</button>
-                    </div>
-                </div>
-                <div class="space-y-1">
-                    <div class="text-[10px] font-black text-gray-600 uppercase mb-4 tracking-widest pl-2">Список серій</div>
-                    ${show.episodes.map((ep, idx) => `
-                        <label class="flex items-center gap-4 p-4 hover:bg-white/5 rounded-2xl cursor-pointer transition-all group">
-                            <input type="checkbox" ${ep.watched ? 'checked' : ''} onchange="toggleEpisode(${show.id}, ${idx})" 
-                                class="w-6 h-6 rounded-lg border-2 border-white/10 bg-white/5 text-blue-600 focus:ring-0 transition-all checked:bg-blue-600">
-                            <div class="text-xs font-bold transition-all ${ep.watched ? 'text-gray-600 line-through' : 'text-white'}">
-                                <span class="text-blue-500 font-black mr-3 opacity-80">S${ep.season}E${ep.number}</span> ${ep.name}
-                            </div>
-                        </label>
-                    `).join('')}
-                </div>
-            `;
-            document.getElementById('modal').classList.replace('hidden', 'flex');
-        };
-
-        window.closeModal = () => document.getElementById('modal').classList.replace('flex', 'hidden');
-
-        window.toggleEpisode = async (showId, idx) => {
-            const show = myShows.find(s => s.id === showId);
-            show.episodes[idx].watched = !show.episodes[idx].watched;
-            show.currentEpisodeCount = show.episodes.filter(e => e.watched).length;
-            await saveToCloud();
-            renderGallery();
-        };
-
-        window.updateStatus = async (showId, status) => {
-            const show = myShows.find(s => s.id === showId);
-            show.userStatus = status;
-            await saveToCloud();
-            openModal(showId); // Перерендерити статус в модалці
-            renderGallery();
-        };
-
-        window.removeCurrentShow = async () => {
-            if (confirm('Видалити цей серіал з вашої бібліотеки?')) {
-                myShows = myShows.filter(s => s.id !== currentEditingId);
-                await saveToCloud();
-                closeModal();
-                renderGallery();
-            }
-        };
-
-        // Закриття пошуку при кліку поза ним
-        document.addEventListener('click', (e) => {
-            if (!document.getElementById('searchInput').contains(e.target)) {
-                document.getElementById('searchResults').classList.add('hidden');
-            }
-        });
-    </script>
-</body>
-</html>
+                // Чекаємо поки Firebase завантажиться
+                const checkFb = setInterval(() => {
+                    if (window.fb) {
+                        clearInterval(checkFb);
+                        initApp();
