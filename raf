@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAF Serials - Cloud</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <!-- Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+
+        const firebaseConfig = JSON.parse(__firebase_config || '{}');
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'raf-serials-default';
+
+        window.db = db;
+        window.auth = auth;
+        window.appId = appId;
+    </script>
+
+    <style>
+        :root { --apple-bg: #000; --apple-card: #1c1c1e; }
+        body { background-color: var(--apple-bg); color: #f5f5f7; font-family: 'Inter', sans-serif; letter-spacing: -0.01em; }
+        .glass { background: rgba(28, 28, 30, 0.7); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .card-row { transition: all 0.2s ease; border: 1px solid rgba(255, 255, 255, 0.05); }
+        .card-row:hover { background: rgba(255, 255, 255, 0.08); }
+        .status-pill { font-size: 8px; padding: 1px 6px; border-radius: 4px; text-transform: uppercase; font-weight: 800; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        
+        #loginOverlay {
+            position: fixed; inset: 0; background: black; z-index: 1000;
+            display: flex; align-items: center; justify-content: center;
+        }
+    </style>
+</head>
+<body class="min-h-screen">
+
+    <!-- Екран авторизації -->
+    <div id="loginOverlay">
+        <div class="glass p-8 rounded-2xl w-full max-w-sm text-center">
+            <div class="w-16 h-16 bg-blue-600 rounded-2xl mx-auto mb-6 flex items-center justify-center font-black text-2xl italic">RAF</div>
+            <h2 class="text-xl font-bold mb-6 tracking-tighter uppercase">Вхід до хмари</h2>
+            <input type="password" id="passInput" placeholder="Введіть пароль" class="w-full h-12 bg-white/5 border border-white/10 rounded-xl px-4 mb-4 text-center focus:outline-none focus:ring-1 focus:ring-blue-500">
+            <button onclick="checkPass()" class="w-full h-12 bg-blue-600 hover:bg-blue-500 rounded-xl font-bold uppercase tracking-widest text-xs transition">Відкрити доступ</button>
+            <p id="loginError" class="text-red-500 text-[10px] mt-4 uppercase font-bold hidden">Невірний пароль</p>
+        </div>
+    </div>
+
+    <div id="mainContent" class="opacity-0 transition-opacity duration-500">
+        <div id="app" class="max-w-5xl mx-auto px-4 py-8">
+            <header class="flex items-center justify-between mb-8">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 bg-gradient-to-br from-blue-600 to-cyan-500 rounded-lg flex items-center justify-center font-black text-white italic">RAF</div>
+                    <h1 class="text-2xl font-black tracking-tighter text-white uppercase">Serials <span class="text-[10px] text-cyan-400 align-top uppercase">Cloud</span></h1>
+                </div>
+                <div id="syncStatus" class="text-[9px] font-bold text-green-500 uppercase flex items-center gap-1">
+                    <span class="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></span> Онлайн
+                </div>
+            </header>
+
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-3 mb-8">
+                <div class="lg:col-span-8 relative">
+                    <input type="text" id="searchInput" placeholder="Пошук серіалів для додавання..." 
+                        class="w-full h-10 bg-white/5 border border-white/10 rounded-lg pl-10 pr-4 focus:ring-1 focus:ring-blue-500 focus:outline-none text-sm transition-all">
+                    <div id="searchResults" class="absolute top-full left-0 right-0 glass mt-1 rounded-lg shadow-2xl z-[100] hidden overflow-hidden border border-white/20"></div>
+                </div>
+                <div class="lg:col-span-4">
+                    <select id="sortOrder" onchange="renderGallery()" class="w-full h-10 glass rounded-lg px-3 appearance-none cursor-pointer text-xs font-bold uppercase tracking-widest">
+                        <option value="dateAdded">📅 Нові в списку</option>
+                        <option value="alphabet">🔤 За алфавітом</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="flex gap-6 border-b border-white/5 mb-6 no-scrollbar overflow-x-auto">
+                <button onclick="setTab('watching')" id="tab-watching" class="pb-2 border-b-2 border-blue-500 text-blue-500 text-[10px] font-black uppercase tracking-widest whitespace-nowrap">Дивлюся</button>
+                <button onclick="setTab('planning')" id="tab-planning" class="pb-2 border-b-2 border-transparent text-gray-500 text-[10px] font-black uppercase tracking-widest hover:text-white whitespace-nowrap">Плани</button>
+                <button onclick="setTab('watched')" id="tab-watched" class="pb-2 border-b-2 border-transparent text-gray-500 text-[10px] font-black uppercase tracking-widest hover:text-white whitespace-nowrap">Готово</button>
+            </div>
+
+            <div id="gallery" class="flex flex-col gap-2"></div>
+        </div>
+    </div>
+
+    <div id="modal" class="fixed inset-0 bg-black/95 z-[200] hidden items-center justify-center p-4 backdrop-blur-md">
+        <div class="glass w-full max-w-2xl max-h-[90vh] rounded-2xl overflow-hidden flex flex-col" id="modalContainer">
+            <div id="modalContent" class="p-8 overflow-y-auto no-scrollbar"></div>
+            <div class="p-4 border-t border-white/5 flex justify-end">
+                <button onclick="closeModal()" class="px-8 py-2 bg-white text-black font-black rounded-lg text-[10px] uppercase">Закрити</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import { doc, setDoc, onSnapshot, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        
+        let myShows = [];
+        let currentTab = 'watching';
+        let currentUser = null;
+        const SECRET_KEY = "1234"; // Змініть цей пароль
+
+        window.checkPass = () => {
+            const val = document.getElementById('passInput').value;
+            if (val === SECRET_KEY) {
+                document.getElementById('loginOverlay').style.display = 'none';
+                document.getElementById('mainContent').classList.remove('opacity-0');
+                initApp();
+            } else {
+                document.getElementById('loginError').classList.remove('hidden');
+            }
+        };
+
+        async function initApp() {
+            const initAuth = async () => {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(window.auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(window.auth);
+                }
+            };
+            await initAuth();
+
+            onAuthStateChanged(window.auth, (user) => {
+                if (!user) return;
+                currentUser = user;
+                
+                const docRef = window.doc(window.db, 'artifacts', window.appId, 'users', user.uid, 'data', 'serials');
+                onSnapshot(docRef, (docSnap) => {
+                    if (docSnap.exists()) {
+                        myShows = docSnap.data().list || [];
+                        renderGallery();
+                    }
+                }, (err) => console.error("Firebase Error:", err));
+            });
+        }
+
+        window.saveToCloud = async () => {
+            if (!currentUser) return;
+            const docRef = window.doc(window.db, 'artifacts', window.appId, 'users', currentUser.uid, 'data', 'serials');
+            await window.setDoc(docRef, { list: myShows });
+        };
+
+        window.addShow = async (id) => {
+            if (myShows.find(s => s.id === id)) return;
+            const res = await fetch(`https://api.tvmaze.com/shows/${id}?embed=episodes`);
+            const show = await res.json();
+            const newShow = {
+                id: show.id,
+                name: show.name,
+                image: show.image?.medium,
+                userStatus: '⏳ У планах',
+                currentEpisodeCount: 0,
+                totalEpisodes: show._embedded.episodes.length,
+                dateAdded: Date.now(),
+                episodes: show._embedded.episodes.map(e => ({ id: e.id, watched: false, name: e.name, season: e.season, number: e.number }))
+            };
+            myShows.push(newShow);
+            await window.saveToCloud();
+            document.getElementById('searchResults').classList.add('hidden');
+            document.getElementById('searchInput').value = '';
+        };
+
+        window.renderGallery = () => {
+            const gallery = document.getElementById('gallery');
+            let filtered = [...myShows];
+            
+            if (currentTab === 'watching') filtered = myShows.filter(s => s.userStatus === '👀 Дивлюсь');
+            else if (currentTab === 'planning') filtered = myShows.filter(s => s.userStatus === '⏳ У планах');
+            else if (currentTab === 'watched') filtered = myShows.filter(s => s.userStatus === '✅ Переглянуто');
+
+            gallery.innerHTML = filtered.map(s => `
+                <div class="card-row glass p-3 rounded-xl flex items-center gap-4 cursor-pointer" onclick="openModal(${s.id})">
+                    <img src="${s.image}" class="w-10 h-14 object-cover rounded shadow">
+                    <div class="flex-1">
+                        <div class="font-bold text-sm text-white">${s.name}</div>
+                        <div class="text-[10px] text-blue-400 font-bold uppercase">${s.currentEpisodeCount} / ${s.totalEpisodes} серій</div>
+                    </div>
+                </div>
+            `).join('');
+        };
+
+        window.setTab = (tab) => {
+            currentTab = tab;
+            document.querySelectorAll('button[id^="tab-"]').forEach(b => {
+                b.classList.replace('border-blue-500', 'border-transparent');
+                b.classList.replace('text-blue-500', 'text-gray-500');
+            });
+            document.getElementById(`tab-${tab}`).classList.replace('border-transparent', 'border-blue-500');
+            document.getElementById(`tab-${tab}`).classList.replace('text-gray-500', 'text-blue-500');
+            renderGallery();
+        };
+
+        const searchInput = document.getElementById('searchInput');
+        searchInput.addEventListener('input', async (e) => {
+            const q = e.target.value;
+            if (q.length < 3) return;
+            const res = await fetch(`https://api.tvmaze.com/search/shows?q=${q}`);
+            const data = await res.json();
+            const results = document.getElementById('searchResults');
+            results.innerHTML = data.map(i => `
+                <div onclick="addShow(${i.show.id})" class="p-3 hover:bg-white/10 cursor-pointer border-b border-white/5 flex items-center gap-3">
+                    <img src="${i.show.image?.medium || ''}" class="w-8 h-10 object-cover rounded">
+                    <div class="text-xs font-bold text-white">${i.show.name}</div>
+                </div>
+            `).join('');
+            results.classList.remove('hidden');
+        });
+
+        window.openModal = (id) => {
+            const show = myShows.find(s => s.id === id);
+            if (!show) return;
+            const content = document.getElementById('modalContent');
+            content.innerHTML = `
+                <div class="mb-6">
+                    <h2 class="text-2xl font-black text-white mb-2 uppercase tracking-tighter">${show.name}</h2>
+                    <div class="flex gap-4 mb-6">
+                        <select onchange="updateStatus(${show.id}, this.value)" class="bg-blue-600 px-3 py-1 rounded text-[10px] font-bold uppercase">
+                            <option value="👀 Дивлюсь" ${show.userStatus === '👀 Дивлюсь' ? 'selected' : ''}>👀 Дивлюсь</option>
+                            <option value="⏳ У планах" ${show.userStatus === '⏳ У планах' ? 'selected
